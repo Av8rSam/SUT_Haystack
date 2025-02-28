@@ -1,0 +1,299 @@
+#include <LiquidCrystal.h>
+#include <SPI.h>
+
+LiquidCrystal lcd(8, 9, 4, 5, 6, 7);
+
+const int slaveSelectPin = 3;  //SPI-LE pin to enable ADF4001
+const int slaveEnablePin = 2;  //SPI-CE pin
+
+long Freq = 55000000;  // start frequency
+long refin = 10000000;  // reference = 10MHz
+long ChanStep = 25000;   // 25kHz
+long channel[5];      // Channel memory
+long Step[5];          // Channel Step memory
+int CHnum = 0;         // Channel start
+int StepNum = 0;       // Channel Step start
+unsigned long Reg[4];  // ADF4001 Reg's
+
+byte tenHz, hundredHz, ones, tens, hundreds, thousands, tenthousands, hundredthousands, millions;
+
+int lcd_key = 0;
+int adc_key_in = 0;
+#define btnRIGHT 0
+#define btnUP 1
+#define btnDOWN 2
+#define btnLEFT 3
+#define btnSELECT 4
+#define btnNONE 5
+
+void setup() {
+  lcd.begin(16, 2);
+  lcd.setCursor(0, 0);
+  lcd.print("  ADF4001");
+  Serial.begin(9600);
+
+  pinMode(slaveSelectPin, OUTPUT);
+  pinMode(slaveEnablePin, OUTPUT);
+  digitalWrite(slaveSelectPin, LOW);
+  digitalWrite(slaveEnablePin, HIGH);
+  SPI.setDataMode(SPI_MODE0);
+  SPI.setBitOrder(MSBFIRST);
+  SPI.setClockDivider(SPI_CLOCK_DIV128);
+  SPI.begin();
+  delay(500);
+
+  Step[0] = 25000;
+  Step[1] = 50000;
+  Step[2] = 75000;
+  Step[3] = 100000;
+  Step[4] = 1000000;
+
+  channel[0] = 45000000;
+  channel[1] = 50000000;
+  channel[2] = 55000000;
+  channel[3] = 60000000;
+  channel[4] = 65000000;
+  // channel[5] = 43000000;
+  // channel[6] = 43127500;
+  // channel[7] = 43887500;
+  // channel[8] = 124500000;
+  // channel[9] = 129820000;
+  // channel[10] = 234500000;
+  // channel[11] = 300000000;
+  // channel[12] = 440000000;
+
+  lcd.setCursor(0, 0);
+  lcd.print("         ");
+  lcd.setCursor(0, 0);
+  lcd.print("S=");
+  lcd.print(ChanStep);
+
+  lcd.setCursor(12, 1);
+  lcd.print(" kHz");
+
+  SetFreq(Freq);
+}
+
+void loop() {
+  lcd_key = read_LCD_buttons();
+  switch (lcd_key) {
+    case btnRIGHT:
+      {
+        // long FreqHi;
+        // Freq = channel[CHnum];
+        // if (ChanStep == 100000) {
+        //   FreqHi = Freq + 10000000;  // +100MHz
+        // } else {
+        //   FreqHi = Freq + 500000;
+        // }
+        // while (Freq < FreqHi) {
+        //   Freq += ChanStep;
+        //   SetFreq(Freq);
+        // }
+
+        // if (ChanStep == 100000) {
+        //   FreqHi = Freq - 10000000;  // +100MHz
+        // } else {
+        //   FreqHi = Freq - 500000;
+        // }
+        // while (FreqHi < Freq) {
+        //   Freq -= ChanStep;
+        //   SetFreq(Freq);
+        // }
+        SetFreq(Freq);
+        break;
+      }
+    case btnLEFT:
+      {
+        StepNum += 1;
+        if (StepNum > 4) StepNum = 0;
+        ChanStep = Step[StepNum];
+        lcd.setCursor(2, 0);
+        lcd.print("       ");
+        lcd.setCursor(2, 0);
+        lcd.print(ChanStep);
+        lcd.print("0");
+
+        showFreq(Freq);
+        // SetFreq(Freq);
+        // delay(200);
+        break;
+      }
+    case btnUP:
+      {
+        Freq += ChanStep;
+        if (Freq > 65000000) Freq = 65000000;
+        showFreq(Freq);
+        // SetFreq(Freq);
+        break;
+      }
+    case btnDOWN:
+      {
+        Freq -= ChanStep;
+        if (Freq < 45000000) Freq = 45000000;
+        showFreq(Freq);
+        // SetFreq(Freq);
+        break;
+      }
+    case btnSELECT:
+      {
+        //lcd.print("SELECT");
+        CHnum += 1;
+        if (CHnum > 4) CHnum = 0;
+        Freq = channel[CHnum];
+        showFreq(Freq);
+        // SetFreq(Freq);
+        // delay(200);
+        break;
+      }
+    case btnNONE:
+      {
+        //lcd.print("NONE  ");
+        break;
+      }
+  }
+  adc_key_in = analogRead(0);
+  delay(20);
+  // Serial.print("ADC=");
+  // Serial.println(adc_key_in);
+  Serial.print("Freq= ");
+  Serial.println(Freq);
+  while (adc_key_in < 900) {
+    adc_key_in = analogRead(0);
+    delay(20);
+  }
+}
+
+int read_LCD_buttons() {
+  adc_key_in = analogRead(0);
+  if (adc_key_in > 1000) return btnNONE;
+  if (adc_key_in < 50) return btnRIGHT;
+  if (adc_key_in < 195) return btnUP;
+  if (adc_key_in < 380) return btnDOWN;
+  if (adc_key_in < 555) return btnLEFT;
+  if (adc_key_in < 790) return btnSELECT;
+  return btnNONE;
+}
+
+void SetFreq(long Freq) {
+  //lcd.setCursor(0, 1);
+  //lcd.print(Freq);
+  //lcd.print(" kHz   ");
+
+  showFreq(Freq);
+
+  ConvertFreq(Freq, Reg);
+  WriteADF2(2);
+  delayMicroseconds(2500);
+  WriteADF2(0);
+  delayMicroseconds(2500);
+  WriteADF2(1);
+  delayMicroseconds(2500);
+  WriteADF2(4);
+  delayMicroseconds(2500);
+}
+
+void WriteADF2(int idx) {  // Make 4 bytes from integer for SPI-Transfer
+  byte buf[3];
+  for (int i = 0; i < 3; i++) {
+    buf[i] = (byte)(Reg[idx] >> (i * 8));
+    Serial.print("BUF: ");
+    Serial.println(buf[i],BIN);
+    Serial.println("end");
+  }
+  WriteADF(buf[2], buf[1], buf[0]);
+  //delay(2000);
+}
+
+void WriteADF(byte a1, byte a2, byte a3) {
+  // write over SPI to ADF4001
+  digitalWrite(slaveSelectPin, LOW);
+  delayMicroseconds(10);
+  SPI.transfer(a1);
+  SPI.transfer(a2);
+  SPI.transfer(a3);
+  Toggle();
+}
+
+int Toggle() {
+  digitalWrite(slaveSelectPin, HIGH);
+  delayMicroseconds(5);
+  digitalWrite(slaveSelectPin, LOW);
+}
+
+void ConvertFreq(long freq, unsigned long R[]) {
+  // PLL-Reg-Reference Counter Latch  - R[0]  = 24 bits
+  // RegisterSelect         //  2 bits
+  int R_Counter = 400;  // 14 bits
+  int ABP = 0;           //  2 bits
+  int TM = 0;            //  2 bits
+  int LDP = 0;           //  1 bit
+  // reserved               //  3 bits
+
+  // PLL-Reg-N Counter Latch          - R[1]  = 24 bits
+  // RegisterSelect         //  2 bits
+  // reserved               //  6 bits
+  int N_Counter = 2000;  // 13 bits
+  int CP_Gain = 0;       //  1 bit
+  // reserved               //  2 bits
+
+  // PLL-Reg-Function Latch           - R[2]
+  // PLL-Reg_Initialize Latch         - R[3]
+  // RegisterSelect         //  2 bits
+  int C_reset = 1;    //  1 bit
+  int PD_1 = 0;       //  1 bit
+  int MUX_OUT = 1;    //  3 bits
+  int PD_POL =  1;     //  Sets the phase detector polarity    1 bit
+  int CP_3ST = 0;     //  1 bit
+  int FAST_MODE = 0;  //  2 bits
+  int TC = 0;         //  4 bits
+  int CS_1 = 2;       //  3 bits  - Current Setting 1
+  int CS_2 = 0;       //  3 bits
+  // int PD2 = 0;        //  1 bit
+  // reserved               //  2 bits
+
+  long RFout = Freq;
+
+  float PFDFreq = refin / R_Counter;
+  float N = RFout / PFDFreq;
+  N_Counter = N;
+  Serial.println(N);
+
+  //Build the Registers
+  R[0] = (unsigned long)(0 + R_Counter * pow(2, 2) + ABP * pow(2, 16) + TM * pow(2, 18) + LDP * pow(2, 20));
+  R[1] = (unsigned long)(1 + N_Counter * pow(2, 8) + CP_Gain * pow(2, 21));
+  R[2] = (unsigned long)(2 + 1 * pow(2, 2) + PD_1 * pow(2, 3) + MUX_OUT * pow(2, 4) + PD_POL * pow(2, 7) + CP_3ST * pow(2, 8) + FAST_MODE * pow(2, 9) + TC * pow(2, 11) + CS_1 * pow(2, 15) + CS_2 * pow(2, 18));
+  R[3] = (unsigned long)(3 + 0 * pow(2, 2) + PD_1 * pow(2, 3) + MUX_OUT * pow(2, 4) + PD_POL * pow(2, 7) + CP_3ST * pow(2, 8) + FAST_MODE * pow(2, 9) + TC * pow(2, 11) + CS_1 * pow(2, 15) + CS_2 * pow(2, 18));
+  R[4] = (unsigned long)(2 + 0 * pow(2, 2) + PD_1 * pow(2, 3) + MUX_OUT * pow(2, 4) + PD_POL * pow(2, 7) + CP_3ST * pow(2, 8) + FAST_MODE * pow(2, 9) + TC * pow(2, 11) + CS_1 * pow(2, 15) + CS_2 * pow(2, 18));
+}
+
+void showFreq(long FREQ) {
+  millions = int(FREQ / 1000000000);
+  hundredthousands = ((FREQ / 100000000) % 10);
+  tenthousands = ((FREQ / 10000000) % 10);
+  thousands = ((FREQ / 1000000) % 10);
+  hundreds = ((FREQ / 100000) % 10);
+  tens = ((FREQ / 10000) % 10);
+  ones = ((FREQ / 1000) % 10);
+  hundredHz = ((FREQ / 100) % 10);
+  tenHz = ((FREQ / 10) % 10);
+  lcd.setCursor(0, 1);
+  lcd.print("            ");
+  if (millions > 0) {
+    lcd.setCursor(0, 1);
+    lcd.print(millions);
+    lcd.print(",");
+  } else {
+    lcd.setCursor(2, 1);
+  }
+  lcd.print(hundredthousands);
+  lcd.print(tenthousands);
+  lcd.print(thousands);
+  lcd.print(",");
+  lcd.print(hundreds);
+  lcd.print(tens);
+  lcd.print(ones);
+  lcd.print(".");
+  lcd.print(hundredHz);
+  lcd.print(tenHz);
+}
