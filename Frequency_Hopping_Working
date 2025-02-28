@@ -1,0 +1,175 @@
+#include <SPI.h>
+
+
+const int slaveSelectPin = 3;  //SPI-LE pin to enable ADF4001
+const int slaveEnablePin = 6;  //SPI-CE pin
+const int audio_pin = 4;  // Low enable pin to ADAfruit audio board
+
+long Freq = 55000000;  // start frequency
+long myFreq;
+long refin = 10000000;  // reference = 10MHz
+long ChanStep = 25000;   // 25kHz
+unsigned long Reg[4];  // ADF4001 Reg's
+
+unsigned long previousMillis = 0;
+
+const long interval = 80;
+
+int freqhop_toggle = 1;
+
+long freqhops[] = {-100000, -75000, -50000, -25000, 0, 25000, 50000, 75000, 100000};
+
+long randNumber;
+
+byte tenHz, hundredHz, ones, tens, hundreds, thousands, tenthousands, hundredthousands, millions;
+
+int adc_key_in = 0;
+
+void setup() {
+  Serial.begin(9600);
+  pinMode(audio_pin, OUTPUT);
+  pinMode(slaveSelectPin, OUTPUT);
+  pinMode(slaveEnablePin, OUTPUT);
+  digitalWrite(audio_pin, HIGH);
+  digitalWrite(slaveSelectPin, LOW);
+  digitalWrite(slaveEnablePin, HIGH);
+  SPI.setDataMode(SPI_MODE0);
+  SPI.setBitOrder(MSBFIRST);
+  SPI.setClockDivider(SPI_CLOCK_DIV128);
+  SPI.begin();
+  delay(500);
+
+  randomSeed(analogRead(0));
+  SetFreq(Freq);
+  digitalWrite(audio_pin, LOW);
+  
+
+  
+}
+
+void loop() {
+  if (freqhop_toggle == HIGH){
+    unsigned long currentMillis = millis();
+    if (currentMillis - previousMillis >= interval) {
+      previousMillis = currentMillis;
+      randNumber = random(0, 9);
+      myFreq = Freq + freqhops[randNumber];
+      Serial.println(myFreq);
+      SetFreq(myFreq);
+    }
+  }
+
+}
+  
+//  unsigned long currentMillis = millis();
+//  if (currentMillis - previousMillis >= interval) {
+//    previousMillis = currentMillis;
+//    if ((Freq <= 62000000) && (updown == LOW)){
+//      Freq = Freq + 250000;
+//      SetFreq(Freq);
+//    }else if ((Freq > 62000000) && (updown == LOW)){
+//      updown = HIGH;
+//      Freq = Freq - 250000;
+//      SetFreq(Freq);
+//    }else if ((Freq >= 47000000) && (updown == HIGH)){
+//      Freq = Freq - 250000;
+//      SetFreq(Freq);
+//    }else if ((Freq <47000000) && (updown == HIGH)){
+//      updown = LOW;
+//      Freq = Freq + 250000;
+//      SetFreq(Freq);
+//    }else{
+//      Serial.println("Somethings wrong");
+//    }
+//  }
+
+
+void SetFreq(long Freq_set) {
+  //lcd.setCursor(0, 1);
+  //lcd.print(Freq);
+  //lcd.print(" kHz   ");
+
+  ConvertFreq(Freq_set, Reg);
+  WriteADF2(2);
+  delayMicroseconds(2500);
+  WriteADF2(0);
+  delayMicroseconds(2500);
+  WriteADF2(1);
+  delayMicroseconds(2500);
+  WriteADF2(3);
+  delayMicroseconds(2500);
+}
+
+void WriteADF2(int idx) {  // Make 4 bytes from integer for SPI-Transfer
+  byte buf[3];
+  for (int i = 0; i < 3; i++) {
+    buf[i] = (byte)(Reg[idx] >> (i * 8));
+//    Serial.print("BUF: ");
+//    Serial.println(buf[i],BIN);
+//    Serial.println("end");
+  }
+  WriteADF(buf[2], buf[1], buf[0]);
+  //delay(100);
+}
+
+void WriteADF(byte a1, byte a2, byte a3) {
+  // write over SPI to ADF4001
+  digitalWrite(slaveSelectPin, LOW);
+  delayMicroseconds(10);
+  SPI.transfer(a1);
+  SPI.transfer(a2);
+  SPI.transfer(a3);
+  Toggle();
+}
+
+int Toggle() {
+  digitalWrite(slaveSelectPin, HIGH);
+  delayMicroseconds(5);
+  digitalWrite(slaveSelectPin, LOW);
+}
+
+void ConvertFreq(long freq, unsigned long R[]) {
+  // PLL-Reg-Reference Counter Latch  - R[0]  = 24 bits
+  // RegisterSelect         //  2 bits
+  int R_Counter = 400;  // 14 bits
+  int ABP = 0;           //  2 bits
+  int TM = 0;            //  2 bits
+  int LDP = 0;           //  1 bit
+  // reserved               //  3 bits
+
+  // PLL-Reg-N Counter Latch          - R[1]  = 24 bits
+  // RegisterSelect         //  2 bits
+  // reserved               //  6 bits
+  int N_Counter = 2000;  // 13 bits
+  int CP_Gain = 0;       //  1 bit
+  // reserved               //  2 bits
+
+  // PLL-Reg-Function Latch           - R[2]
+  // PLL-Reg_Initialize Latch         - R[3]
+  // RegisterSelect         //  2 bits
+  int C_reset = 1;    //  1 bit
+  int PD_1 = 0;       //  1 bit
+  int MUX_OUT = 1;    //  3 bits
+  int PD_POL =  1;     //  Sets the phase detector polarity    1 bit
+  int CP_3ST = 0;     //  1 bit
+  int FAST_MODE = 0;  //  2 bits
+  int TC = 0;         //  4 bits
+  int CS_1 = 3;       //  3 bits  - Current Setting 1
+  int CS_2 = 0;       //  3 bits
+  // int PD2 = 0;        //  1 bit
+  // reserved               //  2 bits
+
+  long RFout = freq;
+
+  float PFDFreq = refin / R_Counter;
+  float N = RFout / PFDFreq;
+  N_Counter = N;
+  //Serial.println(N);
+
+  //Build the Registers
+  R[0] = (unsigned long)(0 + R_Counter * pow(2, 2) + ABP * pow(2, 16) + TM * pow(2, 18) + LDP * pow(2, 20));
+  R[1] = (unsigned long)(1 + N_Counter * pow(2, 8) + CP_Gain * pow(2, 21));
+  R[2] = (unsigned long)(2 + 1 * pow(2, 2) + PD_1 * pow(2, 3) + MUX_OUT * pow(2, 4) + PD_POL * pow(2, 7) + CP_3ST * pow(2, 8) + FAST_MODE * pow(2, 9) + TC * pow(2, 11) + CS_1 * pow(2, 15) + CS_2 * pow(2, 18));
+  R[3] = (unsigned long)(2 + 0 * pow(2, 2) + PD_1 * pow(2, 3) + MUX_OUT * pow(2, 4) + PD_POL * pow(2, 7) + CP_3ST * pow(2, 8) + FAST_MODE * pow(2, 9) + TC * pow(2, 11) + CS_1 * pow(2, 15) + CS_2 * pow(2, 18));
+  //R[4] = (unsigned long)(2 + 0 * pow(2, 2) + PD_1 * pow(2, 3) + MUX_OUT * pow(2, 4) + PD_POL * pow(2, 7) + CP_3ST * pow(2, 8) + FAST_MODE * pow(2, 9) + TC * pow(2, 11) + CS_1 * pow(2, 15) + CS_2 * pow(2, 18));
+}
